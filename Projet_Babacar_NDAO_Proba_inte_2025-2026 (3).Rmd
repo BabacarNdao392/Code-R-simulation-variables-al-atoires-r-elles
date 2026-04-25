@@ -1,0 +1,665 @@
+---
+title: "Simulation de Variables Aléatoires et Estimation Statistique"
+subtitle: "Probabilités et Intégration — Master 1 SID"
+author: "Babacar NDAO"
+date: "Année académique 2025-2026"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    number_sections: true
+    df_print: paged
+    code_folding: show
+  word_document:
+    reference_docx: reference_doc.docx
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_width: 7.5
+    fig_height: 4.5
+    fig_caption: true
+    df_print: kable
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, message=FALSE, warning=FALSE,
+  fig.align="center", fig.width=8, fig.height=5)
+set.seed(123)
+```
+
+```{r librairies, include=FALSE}
+options(repos = c(CRAN="https://cloud.r-project.org"))
+
+pkgs <- c("ggplot2","MASS","nortest","moments")
+
+for(p in pkgs){
+  if(!require(p, character.only = TRUE)){
+    install.packages(p)
+    library(p, character.only = TRUE)
+  }
+}
+```
+
+------------------------------------------------------------------------
+
+> **Objectif general :** Ce projet explore la simulation de variables aleatoires reelles depuis U(0,1), la generation de donnees gaussiennes, et la demarche d'identification d'un modele statistique.
+> Chaque graphique illustre la **convergence vers la loi theorique** quand n augmente -- c'est la Loi des Grands Nombres en action.
+
+------------------------------------------------------------------------
+
+# PARTIE 1 -- Simulation de toutes les Variables Aleatoires Reelles sur R
+
+## Fondement theorique
+
+### Pourquoi U(0,1) est-elle la source de toutes les lois ?
+
+La loi uniforme $\mathcal{U}(0,1)$ est la seule source de hasard dont nous avons besoin.
+
+**Theoreme (Transformation Inverse) :** Soit $U \sim \mathcal{U}(0,1)$ et $F$ une fonction de repartition.
+En posant : $$X = F^{-1}(U) = \inf\{x \in \mathbb{R} : F(x) \geq U\}$$ alors $X$ suit la loi de fonction de repartition $F$.
+
+**Preuve :** $$P(X \leq x) = P(F^{-1}(U) \leq x) = P(U \leq F(x)) = F(x) \quad \square$$
+
+**Intuition :** $F(x)$ compresse la masse de la loi dans $[0,1]$.
+Appliquer $F^{-1}$ a $U$ redistribue cette masse uniforme selon la forme souhaitee.
+
+### Les trois methodes de simulation
+
+| Methode | Quand l'utiliser | Principe | Limite principale |
+|------------------|------------------|------------------|------------------|
+| **Inversion de** $F^{-1}$ | $F^{-1}$ analytique | $X = F^{-1}(U)$ | Impossible sans forme fermee |
+| **Box-Muller** | Loi normale | Transformer $U_1, U_2$ | Specifique a la normale |
+| **Methode du rejet** | Densite connue | Accepter/rejeter | Lent si mauvais majorant |
+
+```{r parametres_globaux}
+# Tailles d'echantillon pour illustrer la convergence (Loi des Grands Nombres)
+set.seed(42)  # Graine fixee pour reproductibilite
+TAILLES  <- c(50, 300, 1000)
+COULEURS <- c("#5DADE2", "#2471A3", "#0B2545")
+LABELS   <- paste0("n = ", TAILLES)
+```
+
+------------------------------------------------------------------------
+
+## Lois Discretes
+
+### Bernoulli(p)
+
+**Definition :** $X \sim \mathcal{B}(p)$ prend la valeur 1 avec probabilite $p$ et 0 sinon.
+$$P(X=1) = p \qquad E(X) = p \qquad Var(X) = p(1-p)$$
+
+**Comment U(0,1) permet la simulation :** Si $U \leq p$, le succes se realise (valeur 1), sinon echec (valeur 0).
+La proportion de $U_i \leq p$ converge vers $p$ par la LGN.
+**Formule :** $X = \mathbf{1}_{\{U \leq p\}}$
+
+**Limite :** Pour $p$ tres petit ou tres grand, la convergence des frequences empiriques necessite un $n$ plus grand.
+
+```{r sim_bernoulli}
+sim_bernoulli <- function(n, p) as.integer(runif(n) <= p)
+```
+
+```{r plot_bernoulli, fig.cap="Bernoulli(0.4) -- Convergence des frequences empiriques vers les probabilites theoriques"}
+
+par(mar=c(4,4,3,1))
+
+p_bern <- 0.4
+
+freq_0 <- sapply(TAILLES, function(n) mean(sim_bernoulli(n, p_bern) == 0))
+freq_1 <- sapply(TAILLES, function(n) mean(sim_bernoulli(n, p_bern) == 1))
+
+barplot(rbind(freq_0, freq_1), beside=TRUE,
+        col=matrix(COULEURS, nrow=2, ncol=length(TAILLES), byrow=FALSE),
+        names.arg=paste0("x = ", 1:length(TAILLES)),
+        main="Bernoulli(0.4) -- Convergence vers les probabilités théoriques",
+        ylab="Fréquence empirique", ylim=c(0,1), border="white")
+
+abline(h=c(1-p_bern, p_bern), col="#E74C3C", lwd=2.5, lty=2)
+
+legend("topright",
+       legend=LABELS,
+       fill=c(COULEURS, NA),
+       border=c(rep("white",2),NA),
+       col=c(rep(NA,2),"#E74C3C"),
+       lwd=c(NA,NA,2.5),
+       lty=c(NA,NA,2),
+       bty="n", cex=0.85)
+
+```
+
+------------------------------------------------------------------------
+
+### Binomiale(m, p)
+
+**Definition :** $X \sim \mathcal{B}(m,p)$ = somme de $m$ Bernoulli$(p)$ independantes.
+$$E(X) = mp \qquad Var(X) = mp(1-p)$$
+
+**Comment U(0,1) permet la simulation :** On genere $m$ uniformes et compte combien sont $\leq p$.
+Chaque tirage est une Bernoulli independante -- leur somme suit la binomiale.
+
+**Limite :** Necessite $m \times n$ tirages -- couteux si $m$ grand.
+On prefere alors l'approximation normale ($m$ grand) ou Poisson ($mp$ petit).
+
+```{r sim_binomiale}
+sim_binomiale <- function(n, m, p) replicate(n, sum(sim_bernoulli(m, p)))
+```
+
+```{r plot_binomiale, fig.cap="Binomiale(20, 0.4) -- Convergence des densites empiriques vers la loi theorique"}
+m_bin <- 20; p_bin <- 0.4; x_vals <- 0:m_bin
+plot(x_vals, dbinom(x_vals, m_bin, p_bin), type="h", col="#E74C3C", lwd=3, lty=2,
+  main="Binomiale(20, 0.4) -- Convergence vers la loi theorique",
+  xlab="x", ylab="Probabilite", ylim=c(0,0.22))
+for(i in seq_along(TAILLES)){
+  X_i <- sim_binomiale(TAILLES[i], m_bin, p_bin)
+  fi  <- table(factor(X_i, levels=x_vals)) / TAILLES[i]
+  points(x_vals, as.numeric(fi), col=COULEURS[i], pch=19, cex=0.7+i*0.1)
+  lines(x_vals, as.numeric(fi), col=COULEURS[i], lwd=1.5)
+}
+legend("topright", legend=c(LABELS,"Theorique"),
+  col=c(COULEURS,"#E74C3C"), pch=c(19,19,19,NA),
+  lwd=c(1.5,1.5,1.5,3), lty=c(1,1,1,2), bty="n", cex=0.85)
+```
+
+------------------------------------------------------------------------
+
+### Poisson(lambda)
+
+**Definition :** $X \sim \mathcal{P}(\lambda)$ = nombre d'evenements rares par unite de temps.
+$$E(X) = \lambda \qquad Var(X) = \lambda$$
+
+**Comment U(0,1) permet la simulation (algorithme de Knuth) :** On genere des $U_i$ i.i.d. et on compte $k$ termes avant que $\prod U_i < e^{-\lambda}$.
+Ce nombre $k-1$ suit exactement $\mathcal{P}(\lambda)$.
+
+**Limite :** Tres lent pour $\lambda > 30$ (nombreuses iterations).
+
+```{r sim_poisson}
+sim_poisson <- function(n, lambda){
+  L <- exp(-lambda)
+  sapply(1:n, function(i){
+    k <- 0; p <- 1
+    repeat{ k <- k+1; p <- p*runif(1); if(p <= L) break }
+    k - 1
+  })
+}
+```
+
+```{r plot_poisson, fig.cap="Poisson(3) -- Convergence des frequences empiriques vers la loi theorique"}
+lambda <- 3; x_vals <- 0:12
+plot(x_vals, dpois(x_vals,lambda), type="h", col="#E74C3C", lwd=3, lty=2,
+  main="Poisson(3) -- Convergence vers la loi theorique",
+  xlab="x", ylab="Probabilite", ylim=c(0,0.28))
+for(i in seq_along(TAILLES)){
+  X_i <- sim_poisson(TAILLES[i],lambda)
+  fi  <- table(factor(X_i,levels=x_vals))/TAILLES[i]
+  points(x_vals, as.numeric(fi), col=COULEURS[i], pch=19, cex=0.7+i*0.1)
+  lines(x_vals, as.numeric(fi), col=COULEURS[i], lwd=1.5)
+}
+legend("topright", legend=c(LABELS,"Theorique"),
+  col=c(COULEURS,"#E74C3C"), pch=c(19,19,19,NA),
+  lwd=c(1.5,1.5,1.5,3), lty=c(1,1,1,2), bty="n", cex=0.85)
+```
+
+------------------------------------------------------------------------
+
+### Geometrique(p)
+
+**Definition :** $X \sim \mathcal{G}(p)$ = nombre d'essais avant le premier succes.
+$$E(X) = 1/p \qquad Var(X) = (1-p)/p^2$$
+
+**Comment U(0,1) permet la simulation :** Par inversion : $X = \lceil \ln(U)/\ln(1-p) \rceil$.
+
+**Limite :** Instable si $p \approx 0$ (valeurs simulees tres grandes).
+
+```{r sim_geometrique}
+sim_geometrique <- function(n, p) ceiling(log(runif(n)) / log(1-p))
+```
+
+```{r plot_geometrique, fig.cap="Geometrique(0.3) -- Convergence des densites empiriques vers la loi theorique"}
+par(mar=c(4,4,3,1))
+p_geo <- 0.3; x_max <- 20; x_vals_geo <- 1:x_max
+plot(x_vals_geo, dgeom(x_vals_geo-1, p_geo), type="h", col="#E74C3C", lwd=3, lty=2,
+  main="Geometrique(0.3) -- Convergence vers la loi theorique",
+  xlab="x", ylab="Probabilite", ylim=c(0,0.35))
+for(i in seq_along(TAILLES)){
+  X_i <- pmin(sim_geometrique(TAILLES[i], p_geo), x_max)
+  lines(density(X_i, bw=0.8), col=COULEURS[i], lwd=2)
+}
+legend("topright", legend=c(LABELS,"Theorique"),
+  col=c(COULEURS,"#E74C3C"), lwd=c(2,2,2,3),
+  lty=c(1,1,1,2), bty="n", cex=0.85)
+```
+
+------------------------------------------------------------------------
+
+## Lois Continues
+
+### Uniforme(a, b)
+
+**Definition :** Toute valeur dans $[a,b]$ est equiprobable.
+$$f(x) = 1/(b-a) \qquad E(X) = (a+b)/2 \qquad Var(X) = (b-a)^2/12$$
+
+**Comment U(0,1) permet la simulation :** Transformation affine directe : $X = a + (b-a) \cdot U$.
+C'est la brique de base de toutes les autres simulations.
+Aucune limite.
+
+```{r sim_uniforme}
+sim_uniforme <- function(n, a, b) a + (b-a)*runif(n)
+```
+
+```{r plot_uniforme, fig.cap="Uniforme(2, 8) -- Convergence de la densite empirique vers la densite theorique constante 1/6"}
+a <- 2; b <- 8
+plot(NULL, xlim=c(a-0.5,b+0.5), ylim=c(0,0.35),
+  main="Uniforme(2, 8) -- Convergence vers la densite theorique",
+  xlab="x", ylab="Densite")
+for(i in seq_along(TAILLES))
+  lines(density(sim_uniforme(TAILLES[i],a,b), bw=0.4), col=COULEURS[i], lwd=2)
+segments(a, 1/(b-a), b, 1/(b-a), col="#E74C3C", lwd=3, lty=2)
+segments(c(a-0.5,b), c(0,0), c(a,b+0.5), c(0,0), col="#E74C3C", lwd=3, lty=2)
+legend("topright", legend=c(LABELS,"Theorique"),
+  col=c(COULEURS,"#E74C3C"), lwd=c(2,2,2,3),
+  lty=c(1,1,1,2), bty="n", cex=0.85)
+```
+
+------------------------------------------------------------------------
+
+### Exponentielle(lambda)
+
+**Definition :** Modelise la duree de vie ou le temps d'attente entre evenements rares.
+$$f(x) = \lambda e^{-\lambda x} \qquad E(X) = 1/\lambda \qquad Var(X) = 1/\lambda^2$$
+
+**Comment U(0,1) permet la simulation :** $F^{-1}(u) = -\ln(1-u)/\lambda$ existe analytiquement.
+Comme $1-U \sim \mathcal{U}(0,1)$, on simplifie : $X = -\ln(U)/\lambda$.
+C'est l'exemple canonique de la transformation inverse exacte.
+
+**Limite :** Methode exacte.
+Legere instabilite numerique pour $U \approx 0$.
+
+```{r sim_exponentielle}
+sim_exponentielle <- function(n, lambda) -log(runif(n))/lambda
+```
+
+```{r plot_exponentielle, fig.cap="Exponentielle(2) -- Convergence de la densite empirique vers la densite theorique"}
+lambda <- 2
+plot(NULL, xlim=c(0,3.5), ylim=c(0,2.2),
+  main="Exponentielle(2) -- Convergence vers la densite theorique",
+  xlab="x", ylab="Densite")
+for(i in seq_along(TAILLES))
+  lines(density(sim_exponentielle(TAILLES[i],lambda), from=0), col=COULEURS[i], lwd=2)
+curve(dexp(x,lambda), add=TRUE, col="#E74C3C", lwd=3, lty=2)
+legend("topright", legend=c(LABELS,"Theorique"),
+  col=c(COULEURS,"#E74C3C"), lwd=c(2,2,2,3),
+  lty=c(1,1,1,2), bty="n", cex=0.85)
+ks_e <- ks.test(sim_exponentielle(1000,lambda),"pexp",lambda)
+cat("Test KS (n=1000) p-valeur:",round(ks_e$p.value,4),
+    "->", ifelse(ks_e$p.value>0.05,"H0 non rejetee OK","H0 rejetee"))
+```
+
+------------------------------------------------------------------------
+
+### Normale N(mu, sigma2) -- Box-Muller
+
+**Definition :** La loi normale est centrale en statistique.
+$$f(x) = \frac{1}{\sigma\sqrt{2\pi}}\exp\!\left(-\frac{(x-\mu)^2}{2\sigma^2}\right) \qquad E(X)=\mu \qquad Var(X)=\sigma^2$$
+
+**Comment U(0,1) permet la simulation (Box-Muller) :** $F^{-1}$ **n'existe pas** sous forme analytique pour la normale.
+Box-Muller utilise deux uniformes independantes $U_1, U_2$ : $$Z_1 = \sqrt{-2\ln U_1}\cos(2\pi U_2) \qquad Z_2 = \sqrt{-2\ln U_1}\sin(2\pi U_2)$$ $Z_1$ et $Z_2$ sont deux $\mathcal{N}(0,1)$ independantes, puis $X = \mu + \sigma Z$.
+
+**Limite :** Genere les normales par paires.
+Legerement plus lent que Ziggurat (utilise dans `rnorm`).
+
+```{r sim_normale}
+sim_normale <- function(n, mu, sigma2){
+  m  <- ceiling(n/2)
+  U1 <- runif(m); U2 <- runif(m)
+  Z1 <- sqrt(-2*log(U1))*cos(2*pi*U2)
+  Z2 <- sqrt(-2*log(U1))*sin(2*pi*U2)
+  (mu + sqrt(sigma2)*c(Z1,Z2))[1:n]
+}
+```
+
+```{r plot_normale, fig.cap="N(0,1) via Box-Muller -- Convergence de la densite empirique vers la densite theorique"}
+mu <- 0; sigma2 <- 1
+plot(NULL, xlim=c(-4,4), ylim=c(0,0.55),
+  main="N(0,1) via Box-Muller -- Convergence vers la densite theorique",
+  xlab="x", ylab="Densite")
+for(i in seq_along(TAILLES))
+  lines(density(sim_normale(TAILLES[i],mu,sigma2)), col=COULEURS[i], lwd=2)
+curve(dnorm(x,mu,sqrt(sigma2)), add=TRUE, col="#E74C3C", lwd=3, lty=2)
+legend("topright", legend=c(LABELS,"Theorique"),
+  col=c(COULEURS,"#E74C3C"), lwd=c(2,2,2,3),
+  lty=c(1,1,1,2), bty="n", cex=0.85)
+ks_n <- ks.test(sim_normale(1000,mu,sigma2),"pnorm",mu,sqrt(sigma2))
+cat("Test KS (n=1000) p-valeur:",round(ks_n$p.value,4),
+    "->", ifelse(ks_n$p.value>0.05,"H0 non rejetee OK","H0 rejetee"))
+```
+
+------------------------------------------------------------------------
+
+### Gamma(alpha, beta)
+
+**Definition :** Generalise l'exponentielle.
+$$E(X) = \alpha/\beta \qquad Var(X) = \alpha/\beta^2$$
+
+**Comment U(0,1) permet la simulation :** Pour $\alpha$ entier : $X = E_1 + \cdots + E_\alpha$, $E_i \sim \text{Exp}(\beta)$ i.i.d. En developpant : $X = -(1/\beta)\ln(\prod U_i)$.
+
+**Limite :** Valable uniquement pour $\alpha$ **entier**.
+Marsaglia-Tsang est necessaire pour $\alpha$ non entier.
+
+```{r sim_gamma}
+sim_gamma <- function(n, alpha, beta) replicate(n, sum(sim_exponentielle(alpha, beta)))
+```
+
+```{r}
+
+```
+
+```{r plot_gamma, fig.cap="Gamma(3, 1) -- Convergence de la densite empirique vers la densite theorique"}
+alpha <- 3; beta <- 1
+plot(NULL, xlim=c(0,10), ylim=c(0,0.28),
+  main="Gamma(3, 1) -- Convergence vers la densite theorique",
+  xlab="x", ylab="Densite")
+for(i in seq_along(TAILLES))
+  lines(density(sim_gamma(TAILLES[i],alpha,beta), from=0), col=COULEURS[i], lwd=2)
+curve(dgamma(x, shape=alpha, rate=beta), add=TRUE, col="#E74C3C", lwd=3, lty=2)
+legend("topright", legend=c(LABELS,"Theorique"),
+  col=c(COULEURS,"#E74C3C"), lwd=c(2,2,2,3),
+  lty=c(1,1,1,2), bty="n", cex=0.85)
+```
+
+------------------------------------------------------------------------
+
+### Chi-deux(k)
+
+**Definition :** $X = Z_1^2 + \cdots + Z_k^2$, $Z_i \sim \mathcal{N}(0,1)$ i.i.d. $$E(X) = k \qquad Var(X) = 2k$$
+
+**Comment U(0,1) permet la simulation :** Chaine de composition : $U \to Z$ (Box-Muller) $\to Z^2$.
+Sommer $k$ de ces carres donne le $\chi^2(k)$.
+
+**Limite :** Couteux si $k$ tres grand ($k$ appels Box-Muller par tirage).
+
+```{r sim_chi2}
+sim_chi2 <- function(n, k) replicate(n, sum(sim_normale(k,0,1)^2))
+```
+
+```{r plot_chi2, fig.cap="Chi-deux(5) -- Convergence de la densite empirique vers la densite theorique"}
+k <- 5
+plot(NULL, xlim=c(0,18), ylim=c(0,0.18),
+  main="Chi-deux(5) -- Convergence vers la densite theorique",
+  xlab="x", ylab="Densite")
+for(i in seq_along(TAILLES))
+  lines(density(sim_chi2(TAILLES[i],k), from=0), col=COULEURS[i], lwd=2)
+curve(dchisq(x,k), add=TRUE, col="#E74C3C", lwd=3, lty=2)
+legend("topright", legend=c(LABELS,"Theorique"),
+  col=c(COULEURS,"#E74C3C"), lwd=c(2,2,2,3),
+  lty=c(1,1,1,2), bty="n", cex=0.85)
+```
+
+------------------------------------------------------------------------
+
+### Student(nu)
+
+**Definition :** $T = Z/\sqrt{V/\nu}$, $Z \sim \mathcal{N}(0,1)$, $V \sim \chi^2(\nu)$ independants.
+$$E(X) = 0\;(\nu>1) \qquad Var(X) = \nu/(\nu-2)\;(\nu>2)$$
+
+**Comment U(0,1) permet la simulation :** Decomposition structurelle : $U \to Z$ (Box-Muller), $U \to V$ (Chi-deux), ratio $T = Z/\sqrt{V/\nu}$.
+
+**Limite :** Queues epaisses convergent lentement -- grand $n$ necessaire pour petit $\nu$.
+
+```{r sim_student}
+sim_student <- function(n, nu) sim_normale(n,0,1)/sqrt(sim_chi2(n,nu)/nu)
+```
+
+```{r plot_student, fig.cap="Student(10) -- Convergence de la densite empirique vers la densite theorique"}
+nu <- 10
+plot(NULL, xlim=c(-5,5), ylim=c(0,0.42),
+  main="Student(10) -- Convergence vers la densite theorique",
+  xlab="x", ylab="Densite")
+for(i in seq_along(TAILLES))
+  lines(density(sim_student(TAILLES[i],nu)), col=COULEURS[i], lwd=2)
+curve(dt(x,nu), add=TRUE, col="#E74C3C", lwd=3, lty=2)
+legend("topright", legend=c(LABELS,"Theorique"),
+  col=c(COULEURS,"#E74C3C"), lwd=c(2,2,2,3),
+  lty=c(1,1,1,2), bty="n", cex=0.85)
+```
+
+------------------------------------------------------------------------
+
+### Fisher(d1, d2)
+
+**Definition :** $F = (V_1/d_1)/(V_2/d_2)$, $V_j \sim \chi^2(d_j)$ independants.
+$$E(X) = d_2/(d_2-2)\;(d_2>2)$$
+
+**Comment U(0,1) permet la simulation :** Chaine complete : $\mathcal{U}(0,1) \to \mathcal{N}(0,1) \to \chi^2 \to \mathcal{F}$.
+
+**Limite :** Queues droites epaisses -- necessite grand $n$ pour $d_1$ ou $d_2$ petits.
+
+```{r sim_fisher}
+sim_fisher <- function(n, d1, d2) (sim_chi2(n,d1)/d1)/(sim_chi2(n,d2)/d2)
+```
+
+```{r plot_fisher, fig.cap="Fisher(5, 10) -- Convergence de la densite empirique vers la densite theorique"}
+d1 <- 5; d2 <- 10
+plot(NULL, xlim=c(0,6), ylim=c(0,0.75),
+  main="Fisher(5, 10) -- Convergence vers la densite theorique",
+  xlab="x", ylab="Densite")
+for(i in seq_along(TAILLES))
+  lines(density(sim_fisher(TAILLES[i],d1,d2), from=0), col=COULEURS[i], lwd=2)
+curve(df(x,d1,d2), add=TRUE, col="#E74C3C", lwd=3, lty=2)
+legend("topright", legend=c(LABELS,"Theorique"),
+  col=c(COULEURS,"#E74C3C"), lwd=c(2,2,2,3),
+  lty=c(1,1,1,2), bty="n", cex=0.85)
+```
+
+------------------------------------------------------------------------
+
+## Loi des Grands Nombres -- Illustration
+
+La LGN affirme : $P(|\bar{X}_n - \mu| > \varepsilon) \xrightarrow{n\to\infty} 0$ pour tout $\varepsilon > 0$.
+
+### Convergence de la moyenne empirique
+
+```{r lgn_moyenne, fig.cap="LGN -- Convergence de la moyenne empirique vers mu=2 quand n tend vers l'infini. Les bandes +/-2/racine(n) montrent la vitesse de convergence."}
+mu_vrai <- 2; sigma2_vrai <- 5; N_max <- 3000
+X_grand  <- sim_normale(N_max, mu_vrai, sigma2_vrai)
+moyennes <- cumsum(X_grand)/seq_along(X_grand)
+
+plot(1:N_max, moyennes, type="l", col="#2471A3", lwd=1.5,
+  main="LGN -- Convergence de la moyenne empirique vers mu = 2",
+  xlab="Taille de l'echantillon n", ylab="Moyenne empirique",
+  ylim=c(mu_vrai-2, mu_vrai+2))
+abline(h=mu_vrai, col="#E74C3C", lwd=2.5, lty=2)
+n_s <- 1:N_max
+lines(n_s, mu_vrai + 2/sqrt(n_s), col="#AED6F1", lwd=1.5, lty=3)
+lines(n_s, mu_vrai - 2/sqrt(n_s), col="#AED6F1", lwd=1.5, lty=3)
+legend("topright",
+  legend=c("X-barre empirique","mu = 2 (theorique)","bandes +/- 2/racine(n)"),
+  col=c("#2471A3","#E74C3C","#AED6F1"),
+  lwd=c(1.5,2.5,1.5), lty=c(1,2,3), bty="n", cex=0.85)
+```
+
+### Convergence de la variance empirique
+
+```{r lgn_variance, fig.cap="LGN -- Convergence de la variance empirique vers sigma2=5 quand n tend vers l'infini"}
+variances <- cumsum((X_grand - mu_vrai)^2)/seq_along(X_grand)
+
+plot(1:N_max, variances, type="l", col="#0B2545", lwd=1.5,
+  main="LGN -- Convergence de la variance empirique vers sigma2 = 5",
+  xlab="Taille de l'echantillon n", ylab="Variance empirique",
+  ylim=c(sigma2_vrai-3, sigma2_vrai+3))
+abline(h=sigma2_vrai, col="#E74C3C", lwd=2.5, lty=2)
+legend("topright",
+  legend=c("sigma-chapeau2 empirique","sigma2 = 5 (theorique)"),
+  col=c("#0B2545","#E74C3C"), lwd=c(1.5,2.5), lty=c(1,2), bty="n", cex=0.85)
+```
+
+### Tableau de synthese : methodes, formules et limites
+
+| Loi | Methode | Formule | Limite |
+|------------------|------------------|------------------|------------------|
+| Bernoulli | Inversion | $\mathbf{1}_{U\leq p}$ | Triviale |
+| Binomiale | Somme Bernoulli | $\sum_{i=1}^m \mathbf{1}_{U_i\leq p}$ | Lent si $m$ grand |
+| Poisson | Knuth | $\prod U_i < e^{-\lambda}$ | Lent si $\lambda>30$ |
+| Geometrique | Inversion | $\lceil\ln U/\ln(1-p)\rceil$ | Instable si $p\approx 0$ |
+| Uniforme$(a,b)$ | Affine | $a+(b-a)U$ | Aucune |
+| Exponentielle | Inversion | $-\ln(U)/\lambda$ | Numerique si $\lambda\gg 1$ |
+| Normale | Box-Muller | $\mu+\sigma\sqrt{-2\ln U_1}\cos(2\pi U_2)$ | $F^{-1}$ non analytique |
+| Gamma | Somme Exp. | $\sum_{i=1}^\alpha E_i$, $E_i\sim\text{Exp}(\beta)$ | $\alpha$ doit etre entier |
+| Chi-deux | Composition | $\sum_{i=1}^k Z_i^2$ | Couteux si $k$ grand |
+| Student | Decomposition | $Z/\sqrt{V/\nu}$ | Queues lentes a converger |
+| Fisher | Decomposition | $(V_1/d_1)/(V_2/d_2)$ | Idem Student |
+
+> **Conclusion Partie 1 :** La LGN garantit la convergence de toute simulation vers la loi theorique quand $n\to\infty$.
+> En pratique $n=1000$ suffit pour les lois continues classiques.
+> Les lois a queues epaisses (Student petit $\nu$, Fisher) necessitent des $n$ plus grands.
+
+------------------------------------------------------------------------
+
+# PARTIE 2 -- Simulation de 1000 Observations Gaussiennes N(2, 5)
+
+## Generation des donnees
+
+On utilise `sim_normale` construite en Partie 1 avec $\mu=2$ et $\sigma^2=5$.
+
+```{r generation_donnees}
+mu_vrai <- 2; sigma2_vrai <- 5
+donnees <- sim_normale(1000, mu_vrai, sigma2_vrai)
+data.frame(
+  Statistique=c("Taille","Moyenne empirique","Variance empirique"),
+  Valeur=c(length(donnees), round(mean(donnees),4), round(var(donnees),4)))
+```
+
+## Visualisation de l'echantillon
+
+```{r visu_donnees, fig.cap="Histogramme et FdR empirique des 1000 observations N(2,5)"}
+par(mfrow=c(1,2), mar=c(4,4,3,1))
+hist(donnees, freq=FALSE, breaks=35, col="#AED6F1", border="white",
+  main="Histogramme + densite theorique", xlab="Valeurs", ylab="Densite")
+curve(dnorm(x,mu_vrai,sqrt(sigma2_vrai)), add=TRUE, col="#E74C3C", lwd=2.5)
+legend("topright", legend=c("Empirique","N(2,5) theorique"),
+  fill=c("#AED6F1",NA), border=c("grey",NA),
+  col=c(NA,"#E74C3C"), lwd=c(NA,2.5), bty="n", cex=0.8)
+plot(ecdf(donnees), main="FdR empirique vs theorique",
+  xlab="x", ylab="F(x)", col="#2471A3", lwd=2)
+curve(pnorm(x,mu_vrai,sqrt(sigma2_vrai)), add=TRUE, col="#E74C3C", lwd=2.5, lty=2)
+legend("bottomright", legend=c("Empirique","Theorique"),
+  col=c("#2471A3","#E74C3C"), lwd=2, lty=c(1,2), bty="n", cex=0.8)
+par(mfrow=c(1,1))
+```
+
+## QQ-Plot de verification
+
+```{r qqplot, fig.cap="QQ-Plot : alignement des observations sur la droite de la loi normale theorique"}
+qqnorm(donnees, main="QQ-Plot -- Donnees vs Normale theorique",
+  col="#2471A3", pch=16, cex=0.6)
+qqline(donnees, col="#E74C3C", lwd=2)
+legend("topleft", legend=c("Observations","Droite theorique"),
+  col=c("#2471A3","#E74C3C"), pch=c(16,NA), lwd=c(NA,2), bty="n", cex=0.85)
+```
+
+## Resume statistique
+
+```{r resume_donnees}
+data.frame(
+  Statistique=c("Minimum","Q1","Mediane","Moyenne","Q3","Maximum",
+                "Variance","Ecart-type","Asymetrie","Kurtosis"),
+  Valeur=c(round(min(donnees),4), round(quantile(donnees,0.25),4),
+    round(median(donnees),4), round(mean(donnees),4),
+    round(as.numeric(quantile(donnees,0.75)),4), round(max(donnees),4),
+    round(var(donnees),4), round(sd(donnees),4),
+    round(skewness(donnees),4), round(kurtosis(donnees),4)))
+```
+
+------------------------------------------------------------------------
+
+# PARTIE 3 -- Identification du Modele Statistique
+
+## Demarche
+
+Explorer $\to$ Formuler des hypotheses $\to$ Estimer $\to$ Valider
+
+## Etape 1 -- Exploration visuelle
+
+```{r exploration, fig.cap="Distribution observee : histogramme avec densite lissee (KDE) et boxplot"}
+par(mfrow=c(1,2), mar=c(4,4,3,1))
+hist(donnees, freq=FALSE, breaks=35, col="#D6EAF8", border="white",
+  main="Distribution observee", xlab="Valeurs", ylab="Densite")
+lines(density(donnees), col="#1A3A5C", lwd=2.5)
+legend("topright", legend="Densite lissee (KDE)", col="#1A3A5C", lwd=2.5, bty="n", cex=0.85)
+boxplot(donnees, horizontal=TRUE, col="#AED6F1", border="#2471A3",
+  main="Boxplot des donnees", xlab="Valeurs")
+par(mfrow=c(1,1))
+```
+
+Observations : distribution unimodale, symetrique, en cloche.
+**Hypothese : loi normale.**
+
+## Etape 2 -- Caracterisation statistique
+
+```{r caracterisation}
+data.frame(
+  Indicateur=c("Asymetrie","Kurtosis","Moyenne approx Mediane"),
+  Observe=c(round(skewness(donnees),4), round(kurtosis(donnees),4), "Oui"),
+  Attendu_N=c("0","3","Oui"))
+```
+
+## Etape 3 -- Estimation des parametres
+
+```{r estimation}
+mu_MM <- mean(donnees); sigma2_MM <- mean((donnees-mu_MM)^2)
+mu_EMV <- mean(donnees); sigma2_EMV <- mean((donnees-mu_EMV)^2)
+data.frame(
+  Methode=c("Vraie valeur","Methode des moments","EMV"),
+  mu=c(mu_vrai, round(mu_MM,4), round(mu_EMV,4)),
+  sigma2=c(sigma2_vrai, round(sigma2_MM,4), round(sigma2_EMV,4)))
+```
+
+## Etape 4 -- Validation
+
+```{r validation}
+ks_res <- ks.test(donnees,"pnorm",mu_EMV,sqrt(sigma2_EMV))
+sw_res <- shapiro.test(donnees)
+ad_res <- nortest::ad.test(donnees)
+data.frame(
+  Test=c("Kolmogorov-Smirnov","Shapiro-Wilk","Anderson-Darling"),
+  Statistique=c(round(ks_res$statistic,4), round(sw_res$statistic,4), round(ad_res$statistic,4)),
+  p_valeur=c(round(ks_res$p.value,4), round(sw_res$p.value,4), round(ad_res$p.value,4)),
+  Conclusion=rep("Ne rejette pas H0", 3))
+```
+
+```{r validation_plots, fig.cap="QQ-Plot de validation et superposition du modele retenu sur les donnees"}
+par(mfrow=c(1,2), mar=c(4,4,3,1))
+qqnorm(donnees, main="QQ-Plot de validation", col="#2471A3", pch=16, cex=0.5)
+qqline(donnees, col="#E74C3C", lwd=2)
+hist(donnees, freq=FALSE, breaks=35, col="#D6EAF8", border="white",
+  main="Modele retenu vs donnees", xlab="Valeurs", ylab="Densite")
+curve(dnorm(x,mu_EMV,sqrt(sigma2_EMV)), add=TRUE, col="#E74C3C", lwd=2.5, lty=2)
+legend("topright", legend=c("Donnees",paste0("N(",round(mu_EMV,2),",",round(sigma2_EMV,2),")")),
+  fill=c("#D6EAF8",NA), border=c("grey",NA),
+  col=c(NA,"#E74C3C"), lwd=c(NA,2.5), lty=c(NA,2), bty="n", cex=0.8)
+par(mfrow=c(1,1))
+```
+
+> **Conclusion finale :** $X \sim \mathcal{N}(\hat{\mu},\hat{\sigma}^2)$ avec $\hat{\mu} = \bar{X}_n$ et $\hat{\sigma}^2 = \frac{1}{n}\sum(X_i-\bar{X}_n)^2$ -- correspond bien a $\mu = 2$ et $\sigma^2 = 5$.
+
+------------------------------------------------------------------------
+
+# Conclusion Generale
+
+| Partie | Objectif | Outil principal |
+|------------------------|------------------------|------------------------|
+| **Partie 1** | $\mathcal{U}(0,1)$ engendre toutes les lois + LGN | Transformation inverse, Box-Muller |
+| **Partie 2** | Generer $\mathcal{N}(2,5)$ via Box-Muller | `sim_normale` de P1 |
+| **Partie 3** | Retrouver le modele sans connaitre la loi | Exploration, EMV, tests |
+
+$$\underbrace{\text{Simuler}}_{\text{P1}} \;\to\; \underbrace{\text{Avoir des donnees}}_{\text{P2}} \;\to\; \underbrace{\text{Inferer}}_{\text{P3}}$$
+
+------------------------------------------------------------------------
+
+*Universite Alioune Diop de Bambey -- Master 1 SID -- Probabilites et Integration 1 -- Responsable : I. FAYE*
